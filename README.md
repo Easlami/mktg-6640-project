@@ -1,1 +1,2 @@
-# mktg-6640-project
+# README Information 
+### This Repo has all the information for our final project. 
