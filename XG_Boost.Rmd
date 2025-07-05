@@ -1,0 +1,272 @@
+---
+title: "XG Boost"
+author: "Riley Walburger"
+date: "2025-06-10"
+output: html_document
+---
+
+
+# Setup 
+
+## Load Packages 
+```{r}
+
+warning(suppressMessages(library(tidyverse))) 
+library(quanteda)
+library(janitor)
+library(here)
+library(skimr)
+
+```
+## Load Data
+```{r}
+
+raw_reviews <- read_csv(here("C:/Users/walbr/Desktop/U of U/3- Summer Semester 2025/Text Analysis/Group Project/Restaurant_Data.csv")) %>% 
+  clean_names()
+
+raw_reviews$style[is.na(raw_reviews$style)] <- "Missing"
+raw_reviews$price[is.na(raw_reviews$price)] <- "Missing"  # or another method
+
+# Create factor vars 
+raw_reviews <- raw_reviews %>% 
+  mutate(across(c(style, price), factor))
+
+```
+
+
+# EDA 
+
+```{r}
+# See data types and structure 
+glimpse(raw_reviews)
+
+summary(raw_reviews)
+# Looks like we have a variety of reviews across many different styles of restaurants. 
+# The most common type of restaurant is Korean with 2 variations of American restaurants following up. 
+
+
+# Check data quality 
+skim(raw_reviews)
+# We are looking at a really clean dataset, there are hardly any issues with missing data and no duplicates
+
+```
+
+## Initial Text Analytics 
+
+We decided to look into the some of the korean restaurants based on the EDA after seeing that there were a good sample group of them in the top 25 restaurants. 
+
+Our New Goal is to 
+- examine the restaurants in the top 25 and see what we can learn from reviews about how they are doing things better than their competitors
+- Do a case study on a chosen restaurant or 2. We have a few options here 1 that is much lower on the ratings and another that is a middle of the pack restaurant. 
+- We hope to provide insights to these restaurants as to how they can improve their restaurant experience to get higher ratings/get ranked higher by yelp
+
+## filter to our subset of Korean Restaurants 
+```{r}
+
+# See the korean restaurants in the top 25 ranks 
+
+# Low restaurants
+raw_reviews %>% 
+  filter(str_detect(style, "Korean")) %>% 
+  filter(restaurant_name != "The Barn Cafe & Restaurant") %>% 
+  group_by(restaurant_name) %>% 
+  summarise(
+    count = n(),
+    star_rating = mean(star_rating, na.rm = TRUE),
+    rank = mean(rank, na.rm = TRUE),
+    number_of_reviews = mean(number_of_reviews)
+  ) %>% 
+  filter(rank > 150) %>% 
+  arrange(rank) %>% 
+  print() 
+
+# High rated restaurants
+top_korean_spots <- raw_reviews %>% 
+  filter(str_detect(style, "Korean"),
+         rank < 26)
+
+# Low rated Korean Restaurants
+bad_korean_spots <- raw_reviews %>% 
+  filter(restaurant_name != "The Barn Cafe & Restaurant") %>% 
+  filter(str_detect(style, "Korean"),
+         rank > 150) 
+```
+
+## Positive Version 
+```{r}
+# Define custom words to remove
+custom_stopwords <- c(stopwords("english"), "restaurant", "food", "great", "good", "place")
+
+# Preprocessing
+top_reviews_corpus <- corpus(top_korean_spots$comment)
+top_reviews_tokens <- tokens(top_reviews_corpus, 
+                             remove_punct = TRUE, 
+                             remove_numbers = TRUE) %>%
+  tokens_remove(custom_stopwords)
+
+# Create a document-term matrix
+top_reviews_dtm <- dfm(top_reviews_tokens)
+
+# Inspect dimensions and preview a few rows of the DFM
+dim(top_reviews_dtm)
+head(top_reviews_dtm, n = 5)
+
+library(quanteda.textstats)
+tstat1 <- textstat_frequency(top_reviews_dtm)
+head(tstat1, 10)
+
+# Load textplots and visualize word frequencies as a word cloud
+library(quanteda.textplots)
+textplot_wordcloud(
+  top_reviews_dtm,
+  min_size = 0.5,
+  max_size = 4,
+  min_count = 3,
+  max_words = 200,
+  color = "darkblue",
+  font = NULL,
+  adjust = 0,
+  rotation = 0.1,
+  random_order = FALSE,
+  random_color = FALSE,
+  ordered_color = FALSE,
+  labelcolor = "gray20",
+  labelsize = 1.5,
+  labeloffset = 0,
+  fixed_aspect = TRUE,
+  comparison = FALSE
+)
+```
+
+
+## Combined Version 
+```{r}
+# Combine with group labels
+combined_reviews <- bind_rows(
+    bad_korean_spots %>% mutate(group = "Low Ranked"), 
+    top_korean_spots %>% mutate(group = "Top Ranked")
+)
+
+# Create corpus
+reviews_corpus <- corpus(combined_reviews, text_field = "comment")
+
+
+tokens_reviews <- tokens(reviews_corpus,
+                         what = "word",
+                         remove_punct = TRUE,
+                         remove_numbers = TRUE,
+                         remove_symbols = TRUE) %>%
+  tokens_tolower() %>%
+  tokens_remove(custom_stopwords) %>%
+  # tokens_wordstem(language = "english") %>%
+  tokens_keep(min_nchar = 3) %>%
+  tokens_ngrams(n = 1:2)
+
+# Create a DFM grouped by sentiment
+dfm_grouped <- dfm(tokens_reviews) %>%
+  dfm_group(groups = docvars(reviews_corpus, "group"))
+
+# Calculate TF-IDF
+tfidf_df <- dfm_tfidf(dfm_grouped)
+
+# Convert TF-IDF to a data.frame for interpretation
+tfidf_df <- convert(tfidf_df, to="data.frame")
+
+
+# Plot wordcloud
+p <- textplot_wordcloud(
+  dfm_grouped,
+  comparison = TRUE,
+  min_size = 0.5,
+  max_size = 3,
+  min_count = 5,
+  max_words = 200,
+  color = c("red", "darkgreen"),
+  font = NULL,
+  adjust = 0,
+  rotation = 0.1,
+  random_order = FALSE,
+  random_color = FALSE,
+  ordered_color = FALSE,
+  labelcolor = "gray20",
+  labelsize = 1.5,
+  labeloffset = 0,
+) 
+
+
+```
+
+
+## XgBoost 
+
+```{r}
+library(xgboost)
+library(Matrix)
+library(quanteda)
+library(tidyverse)
+library(dplyr)
+library(stringr)
+```
+
+### Create DFM, Dense and Sparse DFMs
+```{r}
+corpus <- reviews_corpus
+tokens <- tokens(corpus, remove_punct = TRUE)
+dfm <- dfm(tokens, tolower = TRUE)
+dense_dfm <- as.matrix(dfm) # Convert dfm to dense matrix
+sparse_dfm <- Matrix(dense_dfm, sparse = TRUE) # Convert dense matrix to sparse matrix
+```
+
+
+```{r}
+dummies <- model.matrix(~ style + price - 1, data = combined_reviews)
+sparse_dummies <- as(dummies, "dgCMatrix")
+```
+
+```{r}
+combined_data <- cbind(sparse_dummies, sparse_dfm, combined_reviews$star_rating)
+```
+
+## Model Creation
+```{r}
+# Step 1: Prepare target variable
+target <- combined_reviews$star_rating
+target <- as.numeric(target)  # Ensure it's numeric
+
+# Step 2: Train-test split
+set.seed(123)
+train_idx <- sample(seq_len(nrow(combined_data)), size = 0.8 * nrow(combined_data))
+dtrain <- xgb.DMatrix(data = combined_data[train_idx, ], label = target[train_idx])
+dtest  <- xgb.DMatrix(data = combined_data[-train_idx, ], label = target[-train_idx])
+
+# Step 3: Define model parameters
+params <- list(
+  objective = "reg:squarederror",  # Regression objective
+  eval_metric = "rmse",            # Evaluation metric
+  max_depth = 6,
+  eta = 0.1,
+  booster = "gbtree"
+)
+
+# Step 4: Train the model
+xgb_model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 100,
+  watchlist = list(train = dtrain, eval = dtest),
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+# Step 5: Make predictions
+preds <- predict(xgb_model, dtest)
+
+# Step 6: Evaluate performance (RMSE)
+rmse <- sqrt(mean((preds - target[-train_idx])^2))
+print(paste("Test RMSE:", round(rmse, 3)))
+
+# Optional: Feature importance
+importance <- xgb.importance(model = xgb_model)
+xgb.plot.importance(importance_matrix = importance, top_n = 20)
+```
+
