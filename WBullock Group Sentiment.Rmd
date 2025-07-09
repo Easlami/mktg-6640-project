@@ -24,12 +24,13 @@ library(caret)
 library(broom)
 library(tidyverse)
 library(readtext)
+library(remotes)
 
 ```
 ## Load Data
 ```{r}
 
-raw_reviews <- read_csv(here("top 240 restaurants recommanded in los angeles 2.csv")) %>% 
+raw_reviews <- read_csv(here("data/top 240 restaurants recommanded in los angeles 2.csv")) %>% 
   clean_names()
 
 # Create factor vars 
@@ -103,8 +104,8 @@ test.lexicon <- dictionary(list(positive.terms = c("happy", "joy", "light"),
 ```
 
 ```{r}
-positive_words_bing <- scan("positive-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
-negative_words_bing <- scan("negative-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
+positive_words_bing <- scan("data/positive-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
+negative_words_bing <- scan("data/negative-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
 sentiment_bing <- dictionary(list(positive = positive_words_bing, negative = negative_words_bing))
 
 ```
@@ -123,13 +124,13 @@ dfm_sentiment <- dfm_lookup(dfm_reviews, dictionary = sentiment.dictionary)
 
 head(dfm_sentiment)
 ```
+
 ```{r}
 
 dfm_sentiment_df<-convert(dfm_sentiment, to ='data.frame')
 dfm_sentiment_df$net<-(dfm_sentiment_df$positive)-(dfm_sentiment_df$negative)
 summary(dfm_sentiment_df)# document level summary
 
-install.packages("remotes")
 remotes::install_github("kbenoit/quanteda.dictionaries")
 
 library("quanteda.dictionaries")
@@ -205,10 +206,10 @@ library(syuzhet)
 library(tidyverse)
 
 # Read CSV
-raw_review2 <- read_csv("top 240 restaurants recommanded in los angeles 2.csv")
+raw_review2 <- raw_reviews
 
 korean_reviews22 <- raw_review2 %>%
-  filter(str_detect(tolower(Style), "korean"))
+  filter(str_detect(tolower(style), "korean"))
 
 
 # Take a random sample of 500 rows
@@ -216,7 +217,7 @@ set.seed(122335)
 raw_reviews22 <- slice_sample(korean_reviews22, n = 100)
 
 # Run NRC sentiment analysis on the 'comment' column
-nrc_data <- get_nrc_sentiment(raw_reviews22$Comment)
+nrc_data <- get_nrc_sentiment(raw_reviews22$comment)
 
 # Combine sentiment scores with the original data
 df_combined <- bind_cols(raw_reviews22, nrc_data)
