@@ -6,7 +6,7 @@ output: html_document
 ---
 # Load and Explore Data
 ```{r}
-warning(suppressMessages(library(tidyverse))) 
+suppressWarnings(library(tidyverse))
 library(caret)
 library(randomForest)
 library(janitor)
@@ -15,100 +15,41 @@ library(quanteda)
 library(quanteda.textstats)
 ```
 
+# Load Data and preprocessing
 ```{r}
 
-# See the korean restaurants in the top 25 ranks 
-raw_reviews <- read_csv(here("data/top 240 restaurants recommanded in los angeles 2.csv")) %>% clean_names()
-# Low restaurants
-raw_reviews %>% 
-  filter(str_detect(style, "Korean")) %>% 
-  filter(restaurant_name != "The Barn Cafe & Restaurant") %>% 
-  group_by(restaurant_name) %>% 
-  summarise(
-    count = n(),
-    star_rating = mean(star_rating, na.rm = TRUE),
-    rank = mean(rank, na.rm = TRUE),
-    number_of_reviews = mean(number_of_reviews)
-  ) %>% 
-  filter(rank > 150) %>% 
-  arrange(rank) %>% 
-  print() 
-
-# High rated restaurants
-top_korean_spots <- raw_reviews %>% 
-  filter(str_detect(style, "Korean"),
-         rank < 26)
-
-# Low rated Korean Restaurants
-bad_korean_spots <- raw_reviews %>% 
-  filter(restaurant_name != "The Barn Cafe & Restaurant") %>% 
-  filter(str_detect(style, "Korean"),
-         rank > 150) 
+source("preprocessing_master.R")
 ```
+
 
 ## RandomForest 
 
 ```{r}
-# Combine the 2 groups and add in the classifier for the RF model 
-top_korean_spots <- top_korean_spots %>%
-  mutate(rank_group = "High")
 
-bad_korean_spots <- bad_korean_spots %>%
-  mutate(rank_group = "Low")
-
-korean_reviews <- bind_rows(top_korean_spots, bad_korean_spots) %>%
-  mutate(rank_group = factor(rank_group))
-
-# 2. Build a corpus and preprocess with quanteda
-
-library(quanteda)
-
-custom_stopwords <- c(stopwords("english"), "restaurant", "food", "great", "good", "place")
-
-corp <- corpus(korean_reviews, text_field = "comment")
-docvars(corp, "rank_group") <- korean_reviews$rank_group
-
-
-# Create corpus
-# Combine with group labels
-# Create corpus
-reviews_corpus <- corpus(korean_reviews, text_field = "comment")
-
-
-tokens_reviews <- tokens(reviews_corpus,
-                         what = "word",
-                         remove_punct = TRUE,
-                         remove_numbers = TRUE,
-                         remove_symbols = TRUE) %>%
-  tokens_tolower() %>%
-  tokens_remove(custom_stopwords) %>%
-  tokens_keep(min_nchar = 3) %>% 
-  dfm()
-
-# Optional: check most frequent words
-topfeatures(tokens_reviews, 20)
+# check most frequent words
+topfeatures(dfm_reviews, 20)
 
 # Check Word Frequencies by Class
-textstat_keyness(tokens_reviews, target = korean_reviews$rank_group == "High") %>% 
+textstat_keyness(dfm_reviews, target = korean_reviews$rank_group == "High") %>% 
   head(10)
 
-textstat_keyness(tokens_reviews, target = korean_reviews$rank_group == "Low") %>% 
+textstat_keyness(dfm_reviews, target = korean_reviews$rank_group == "Low") %>% 
   head(10)
 
 
 # Word Cloud
 library(quanteda.textplots)
-textplot_wordcloud(dfm_group(tokens_reviews, groups = korean_reviews$rank_group), 
+textplot_wordcloud(dfm_group(dfm_reviews, groups = korean_reviews$rank_group), 
                    comparison = TRUE, 
                    max_words = 100, 
                    color = c("darkgreen", "red"))
 
 # Add group labels to your DFM
-docvars(tokens_reviews, "rank_group") <- korean_reviews$rank_group
+docvars(dfm_reviews, "rank_group") <- korean_reviews$rank_group
 
 
-X <- convert(tokens_reviews, to = "matrix")
-y <- docvars(tokens_reviews, "rank_group")
+X <- convert(dfm_reviews, to = "matrix")
+y <- docvars(dfm_reviews, "rank_group")
 
 
 set.seed(123)
