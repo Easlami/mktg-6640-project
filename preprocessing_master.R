@@ -48,7 +48,7 @@ reviews_tokens <- tokens(corpus_base,
                                    ) %>%
   tokens_tolower() %>% # set all to lowercase
   tokens_keep(min_nchar = 3) %>% # at least 3 characters
-  tokens_remove(pattern = custom_stopwords)  # remove stopwords using english group and our custom words
+  tokens_remove(custom_stopwords)  # remove stopwords using english group and our custom words
 
 # Create DFM 
 
@@ -67,6 +67,6 @@ cat("  - korean_reviews    : Filtered Korean restaurants with High/Low rank grou
 cat("  - corpus_base       : Quanteda corpus built from review comments\n")
 cat("  - custom_stopwords  : Custom stopword list (standard + domain-specific terms)\n")
 cat("  - reviews_tokens    : Tokenized and cleaned review text (lowercase, no stopwords)\n")
-cat("  - dfm_reviews       : Document-feature matrix (DFM) for modeling or analysis\n")
-cat("  - dfm_tfidf_reviews : Document-feature matrix (DFM) with tfidf\n")
+cat("  - dfm_reviews       : Document-feature/term matrix (DFM) for modeling or analysis\n")
+cat("  - dfm_tfidf_reviews : Document-feature/term matrix (DFM) with tfidf\n")
 
