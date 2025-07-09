@@ -224,32 +224,43 @@ sparse_dummies <- as(dummies, "dgCMatrix")
 ```
 
 ```{r}
-combined_data <- cbind(sparse_dummies, sparse_dfm, combined_reviews$star_rating)
+combined_data <- cbind(sparse_dummies, sparse_dfm)
+```
+
+```{r}
+# Convert to numeric class labels
+target <- as.numeric(as.factor(combined_reviews$group)) - 1  # xgboost expects 0-based classes  # Subtract 1 to start at 0
+
+```
+
+```{r}
+target <- as.numeric(as.factor(combined_reviews$group)) - 1
+unique(target)
+length(unique(target))
 ```
 
 ## Model Creation
 ```{r}
-# Step 1: Prepare target variable
-target <- combined_reviews$star_rating
-target <- as.numeric(target)  # Ensure it's numeric
+library(xgboost)
+library(caret)  # For data split
 
-# Step 2: Train-test split
+# Split into training and testing
 set.seed(123)
-train_idx <- sample(seq_len(nrow(combined_data)), size = 0.8 * nrow(combined_data))
+train_idx <- createDataPartition(target, p = 0.8, list = FALSE)
+
 dtrain <- xgb.DMatrix(data = combined_data[train_idx, ], label = target[train_idx])
 dtest  <- xgb.DMatrix(data = combined_data[-train_idx, ], label = target[-train_idx])
 
-# Step 3: Define model parameters
+# Define parameters
+num_class <- length(unique(target))
+
 params <- list(
-  objective = "reg:squarederror",  # Regression objective
-  eval_metric = "rmse",            # Evaluation metric
-  max_depth = 6,
-  eta = 0.1,
-  booster = "gbtree"
+  objective = "binary:logistic",
+  eval_metric = "logloss"
 )
 
-# Step 4: Train the model
-xgb_model <- xgb.train(
+# Train model
+model <- xgb.train(
   params = params,
   data = dtrain,
   nrounds = 100,
@@ -257,16 +268,91 @@ xgb_model <- xgb.train(
   early_stopping_rounds = 10,
   verbose = 1
 )
+```
 
-# Step 5: Make predictions
-preds <- predict(xgb_model, dtest)
+```{r}
+pred_probs <- predict(model, dtest)
+pred_labels <- if (num_class > 2) max.col(matrix(pred_probs, ncol = num_class, byrow = TRUE)) - 1 else as.numeric(pred_probs > 0.5)
 
-# Step 6: Evaluate performance (RMSE)
-rmse <- sqrt(mean((preds - target[-train_idx])^2))
-print(paste("Test RMSE:", round(rmse, 3)))
+confusionMatrix(factor(pred_labels), factor(target[-train_idx]))
+```
 
-# Optional: Feature importance
-importance <- xgb.importance(model = xgb_model)
-xgb.plot.importance(importance_matrix = importance, top_n = 20)
+```{r}
+# Combine column names from dummies and dfm
+text_feature_names <- colnames(dfm)
+dummy_feature_names <- colnames(sparse_dummies)
+all_feature_names <- c(dummy_feature_names, text_feature_names)
+```
+
+```{r}
+importance_matrix <- xgb.importance(feature_names = all_feature_names, model = model)
+
+xgb.plot.importance(importance_matrix, top_n = 20)
+```
+
+```{r}
+# Don't convert to numeric target — use original factor
+combined_reviews$group <- factor(combined_reviews$group, levels = c("group_low", "group_high"))
+
+# Make sure your dfm_mat gets labeled with this
+dfm_mat$group <- combined_reviews$group
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(quanteda)
+library(quanteda.textplots)  # optional for visualizations
+library(quanteda.textstats)
+
+# Add target to the reviews dataset
+combined_reviews$target <- target
+
+# Create tokens and remove punctuation and stop words
+tokens_clean <- tokens(reviews_corpus, remove_punct = TRUE) %>%
+  tokens_remove(stopwords("en"))
+
+# Create dfm from cleaned tokens
+dfm_clean <- dfm(tokens_clean, tolower = TRUE)
+# Convert dfm to a matrix and then to data.frame
+dfm_mat <- as.data.frame(as.matrix(dfm_clean))
+
+# Make sure row count matches
+stopifnot(nrow(dfm_mat) == nrow(combined_reviews))
+
+# Bind group label
+dfm_mat$group <- combined_reviews$target
+
+# Split into two datasets for group 0 and group 1
+group_0 <- dfm_mat[dfm_mat$group == 0, -ncol(dfm_mat)]
+group_1 <- dfm_mat[dfm_mat$group == 1, -ncol(dfm_mat)]
+
+# Sum word counts in each group
+group_0_sums <- colSums(group_0)
+group_1_sums <- colSums(group_1)
+
+# Combine into a data frame
+word_comparison <- data.frame(
+  word = names(group_0_sums),
+  group_0 = group_0_sums,
+  group_1 = group_1_sums
+)
+
+# Calculate difference
+word_comparison <- word_comparison %>%
+  mutate(
+    diff = group_1 - group_0,
+    total = group_0 + group_1
+  ) %>%
+  arrange(desc(abs(diff)))
+
+word_comparison <- word_comparison %>%
+  rename(
+    group_low = group_0,
+    group_high = group_1
+  )
+# View most distinguishing words
+head(word_comparison, 50)
 ```
 
