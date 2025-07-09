@@ -21,7 +21,7 @@ library(skimr)
 ## Load Data
 ```{r}
 
-raw_reviews <- read_csv(here("group_project/top 240 restaurants recommanded in los angeles 2.csv")) %>% 
+raw_reviews <- read_csv(here("data/top 240 restaurants recommanded in los angeles 2.csv")) %>% 
   clean_names()
 
 # Create factor vars 
@@ -287,29 +287,6 @@ ggplot(top25_prices, aes(x = price, y = n, fill = price)) +
        x = "Price Tier", y = "Count") +
   theme_minimal()
 
-
-raw_reviews %>% 
-  filter(style == str_detect("Korean")) %>% 
-  group_by(restaurant_name) %>% 
-  summarise(count = n(),
-            star_rating = mean(star_rating),
-            rank = mean(rank)) %>% 
-  view()
-
-raw_reviews %>% 
-  filter(str_detect(style, "Korean")) %>% 
-  group_by(restaurant_name) %>% 
-  summarise(
-    count = n(),
-    star_rating = mean(star_rating, na.rm = TRUE),
-    rank = mean(rank, na.rm = TRUE),
-    number_of_reviews = mean(number_of_reviews)
-  ) %>% 
-  view()
-
-
-unique(raw_reviews$style)
-
 ```
 
 
@@ -461,11 +438,4 @@ p <- textplot_wordcloud(
 
 ```
 
-```{r}
-
-ggsave(p, "plot.png")
-```
-
-
-## XgBoost 
 
