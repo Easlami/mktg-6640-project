@@ -293,9 +293,6 @@ xgb.plot.importance(importance_matrix, top_n = 20)
 ```{r}
 # Don't convert to numeric target — use original factor
 combined_reviews$group <- factor(combined_reviews$group, levels = c("group_low", "group_high"))
-
-# Make sure your dfm_mat gets labeled with this
-dfm_mat$group <- combined_reviews$group
 ```
 
 
@@ -317,6 +314,8 @@ tokens_clean <- tokens(reviews_corpus, remove_punct = TRUE) %>%
 dfm_clean <- dfm(tokens_clean, tolower = TRUE)
 # Convert dfm to a matrix and then to data.frame
 dfm_mat <- as.data.frame(as.matrix(dfm_clean))
+
+dfm_mat$group <- combined_reviews$target
 
 # Make sure row count matches
 stopifnot(nrow(dfm_mat) == nrow(combined_reviews))
@@ -354,5 +353,85 @@ word_comparison <- word_comparison %>%
   )
 # View most distinguishing words
 head(word_comparison, 50)
+```
+
+## Adding a few More Columns 
+
+```{r}
+library(tidytext)
+library(dplyr)
+
+# Make sure the column exists
+stopifnot("comment" %in% colnames(combined_reviews))
+
+# Tokenize words from the 'comment' column
+word_usage <- combined_reviews %>%
+  mutate(doc_id = row_number()) %>%
+  select(restaurant_name, comment) %>%
+  unnest_tokens(word, comment, token = "words") %>%
+  distinct(restaurant_name, word)
+
+# Count how many restaurants used each word
+word_restaurant_counts <- word_usage %>%
+  count(word, name = "restaurant_count")
+```
+
+```{r}
+# Convert importance matrix to data frame if it's not already
+importance_df <- as.data.frame(importance_matrix)
+
+# Rename column for easier joining
+importance_df <- importance_df %>%
+  rename(word = Feature, xgb_importance = Gain)
+```
+
+```{r}
+word_comparison <- word_comparison %>%
+  left_join(word_restaurant_counts, by = "word") %>%
+  left_join(importance_df, by = "word") %>%
+  mutate(
+    restaurant_count = replace_na(restaurant_count, 0),
+    xgb_importance = replace_na(xgb_importance, 0)
+  )
+```
+
+```{r}
+# View final table with new columns
+head(word_comparison %>%
+       select(word, group_low, group_high, diff, restaurant_count, xgb_importance) %>%
+       arrange(desc(abs(diff))), 50)
+```
+
+```{r}
+top_words <- word_comparison %>%
+  arrange(desc(xgb_importance)) %>%
+  slice_head(n = 20)
+
+head(top_words, 20)
+```
+
+```{r}
+library(officer)
+library(flextable)
+
+# Select relevant columns and arrange by importance
+table_to_export <- word_comparison %>%
+  select(word, group_low, group_high, diff, restaurant_count, xgb_importance) %>%
+  arrange(desc(xgb_importance)) %>%
+  slice_head(n = 50)  # top 50 words for presentation
+
+# Create flextable object
+ft <- flextable(table_to_export)
+
+# Format table nicely (auto width, bold headers, etc.)
+ft <- autofit(ft)
+ft <- theme_vanilla(ft)
+
+# Create Word document and add table
+doc <- read_docx()
+doc <- body_add_flextable(doc, ft)
+
+# Save the Word doc
+print(doc, target = "word_comparison_table.docx")
 ```
 
