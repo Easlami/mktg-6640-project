@@ -1,0 +1,710 @@
+---
+title: "Sentiment update"
+author: "Whitney Bullock"
+date: "2025-07-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup 
+
+## Load Packages 
+```{r}
+
+warning(suppressMessages(library(tidyverse))) 
+library(quanteda)
+library(janitor)
+library(here)
+library(skimr)
+library(sentimentr)
+library(caret)
+library(broom)
+library(tidyverse)
+library(readtext)
+library(dplyr)
+library(tidyr)
+
+
+
+```
+## Load Data
+```{r}
+
+raw_reviews <- read_csv(here("top 240 restaurants recommanded in los angeles 2.csv")) %>% 
+  clean_names()
+
+# Create factor vars 
+raw_reviews <- raw_reviews %>% 
+  mutate(across(c(style, price), factor))
+
+```
+
+# Filtering for Korean restaurants 
+```{r}
+Korean_reviews <- raw_reviews %>% 
+  filter(restaurant_name != "The Barn Cafe & Restaurant") %>% 
+  filter(str_detect(style, "Korean"))
+```
+
+# looking at Korean restaurant details 
+```{r}
+Korean_restaurants <- raw_reviews %>%
+  filter(str_detect(as.character(style), regex("korean", ignore_case = TRUE))) %>%
+  group_by(restaurant_name) %>%
+  summarise(
+    best_rank = min(rank),              # Best (lowest) rank among entries
+    avg_star_rating = mean(star_rating), # Average star rating
+    total_reviews = sum(number_of_reviews), # Sum of reviews
+    style = first(style)                # Pick first style as representative
+  ) %>%
+  arrange(best_rank)
+
+print(Korean_restaurants)
+
+head(Korean_restaurants,n=10)
+tail(Korean_restaurants,n=10)
+```
+
+
+### Spliting into top and bad Korean Restaurants 
+
+```{r}
+# High rated restaurants
+top_korean_spots <- raw_reviews %>% 
+  filter(str_detect(style, "Korean"),
+         rank < 26)
+
+# Low rated Korean Restaurants
+bad_korean_spots <- raw_reviews %>% 
+  filter(restaurant_name != "The Barn Cafe & Restaurant") %>% 
+  filter(str_detect(style, "Korean"),
+         rank > 150) 
+```
+
+# setting seed 
+
+```{r}
+corp_rest <- quanteda::corpus(Korean_reviews$comment)
+summary(corp_rest, n=10)
+```
+
+```{r}
+corp_top <- quanteda::corpus(top_korean_spots$comment)
+summary(corp_top, n=10)
+
+corp_bad <- quanteda::corpus(bad_korean_spots$comment)
+summary(corp_bad, n=10)
+
+```
+
+### Tokenizing 
+
+```{r}
+Korean_reviews <- raw_reviews %>%
+  filter(str_detect(style, regex("korean", ignore_case = TRUE))) %>%
+  filter(!is.na(comment))  # Ensure no missing comments
+
+# Create a quanteda corpus explicitly
+corp_rest <- quanteda::corpus(Korean_reviews$comment)
+
+# Define custom stopwords
+custom_stopwords <- c(stopwords("en"), "restaurant", "food", "place")
+
+# Tokenize
+reviews_tokens <- quanteda::tokens(corp_rest,
+                                   remove_punct = TRUE,
+                                   remove_numbers = TRUE,
+                                   remove_symbols = TRUE) %>%
+                  tokens_remove(pattern = custom_stopwords)
+
+```
+
+
+```{r}
+
+top_reviews <- raw_reviews %>%
+  filter(str_detect(style, regex("korean", ignore_case = TRUE))) %>%
+  filter(!is.na(comment))  # Ensure no missing comments
+
+# Create a quanteda corpus explicitly
+corp_top <- quanteda::corpus(top_korean_spots$comment)
+
+# Define custom stopwords
+custom_stopwords <- c(stopwords("en"), "restaurant", "food", "place")
+
+# Tokenize
+reviews_tokens_top <- quanteda::tokens(corp_top,
+                                   remove_punct = TRUE,
+                                   remove_numbers = TRUE,
+                                   remove_symbols = TRUE) %>%
+                  tokens_remove(pattern = custom_stopwords)
+
+
+bad_reviews <- raw_reviews %>%
+  filter(str_detect(style, regex("korean", ignore_case = TRUE))) %>%
+  filter(!is.na(comment))  # Ensure no missing comments
+
+# Create a quanteda corpus explicitly
+corp_bad <- quanteda::corpus(bad_korean_spots$comment)
+
+# Define custom stopwords
+custom_stopwords <- c(stopwords("en"), "restaurant", "food", "place")
+
+# Tokenize
+reviews_tokens_bad <- quanteda::tokens(corp_bad,
+                                   remove_punct = TRUE,
+                                   remove_numbers = TRUE,
+                                   remove_symbols = TRUE) %>%
+                  tokens_remove(pattern = custom_stopwords)
+
+```
+
+
+
+```{r}
+test.lexicon <- dictionary(list(positive.terms = c("happy", "joy", "light"), 
+                                negative.terms = c("sad", "angry", "darkness")))
+```
+
+```{r}
+positive_words_bing <- scan("positive-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
+negative_words_bing <- scan("negative-words.txt", what = "char", sep = "\n", skip = 35, quiet = T)
+sentiment_bing <- dictionary(list(positive = positive_words_bing, negative = negative_words_bing))
+
+```
+
+
+```{r}
+sentiment.dictionary <- dictionary(list(positive = positive_words_bing, negative = negative_words_bing))
+str(sentiment.dictionary)
+
+```
+
+```{r}
+dfm_reviews <- dfm(reviews_tokens)
+
+dfm_sentiment <- dfm_lookup(dfm_reviews, dictionary = sentiment.dictionary)
+
+head(dfm_sentiment)
+```
+
+```{r}
+dfm_reviews_top <- dfm(reviews_tokens_top)
+
+dfm_sentiment_top <- dfm_lookup(dfm_reviews_top, dictionary = sentiment.dictionary)
+
+head(dfm_sentiment_top)
+
+
+dfm_reviews_bad <- dfm(reviews_tokens_bad)
+
+dfm_sentiment_bad <- dfm_lookup(dfm_reviews_bad, dictionary = sentiment.dictionary)
+
+head(dfm_sentiment_bad)
+
+
+```
+
+
+
+
+
+```{r}
+
+dfm_sentiment_df<-convert(dfm_sentiment, to ='data.frame')
+dfm_sentiment_df$net<-(dfm_sentiment_df$positive)-(dfm_sentiment_df$negative)
+summary(dfm_sentiment_df)# document level summary
+
+install.packages("remotes")
+remotes::install_github("kbenoit/quanteda.dictionaries")
+
+library("quanteda.dictionaries")
+output_mfd <- quanteda.dictionaries::liwcalike(corp_rest, 
+                        dictionary = data_dictionary_MFD)
+head(output_mfd)
+
+
+
+```
+
+```{r}
+dfm_sentiment_df_top <-convert(dfm_sentiment_top, to ='data.frame')
+dfm_sentiment_df_top$net<-(dfm_sentiment_df_top$positive)-(dfm_sentiment_df_top$negative)
+summary(dfm_sentiment_df_top)# document level summary
+
+install.packages("remotes")
+remotes::install_github("kbenoit/quanteda.dictionaries")
+
+library("quanteda.dictionaries")
+output_mfd_top <- quanteda.dictionaries::liwcalike(corp_top, 
+                        dictionary = data_dictionary_MFD)
+head(output_mfd_top)
+
+
+
+dfm_sentiment_df_bad <-convert(dfm_sentiment_bad, to ='data.frame')
+dfm_sentiment_df_bad$net<-(dfm_sentiment_df_bad$positive)-(dfm_sentiment_df_bad$negative)
+summary(dfm_sentiment_df_bad)# document level summary
+
+install.packages("remotes")
+remotes::install_github("kbenoit/quanteda.dictionaries")
+
+library("quanteda.dictionaries")
+output_mfd_bad <- quanteda.dictionaries::liwcalike(corp_bad, 
+                        dictionary = data_dictionary_MFD)
+head(output_mfd_bad)
+
+```
+
+
+```{r}
+dfm_sentiment_prop <- dfm_weight(dfm_sentiment, scheme = "prop")
+head(dfm_sentiment_prop)
+
+dfm_sentiment_prop_top <- dfm_weight(dfm_sentiment_top, scheme = "prop")
+head(dfm_sentiment_prop_top)
+
+dfm_sentiment_prop_bad <- dfm_weight(dfm_sentiment_bad, scheme = "prop")
+head(dfm_sentiment_prop_bad)
+```
+### Sentiment Scores 
+
+```{r}
+sentiment <- convert(dfm_sentiment_prop, "data.frame") %>%
+    gather(positive, negative, key = "Polarity", value = "Share") %>% 
+    mutate(document = as_factor(doc_id)) %>% 
+    rename(Review = document)
+
+ggplot(sentiment, aes(Review, Share, fill = Polarity, group = Polarity)) + 
+    geom_bar(stat='identity', position = position_dodge(), size = 1) + 
+    scale_fill_brewer(palette = "Set1") + 
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) + 
+    ggtitle("Sentiment scores in Korean Restaurant Reviews (relative)")
+
+
+
+sentiment_top <- convert(dfm_sentiment_prop_top, "data.frame") %>%
+    gather(positive, negative, key = "Polarity", value = "Share") %>% 
+    mutate(document = as_factor(doc_id)) %>% 
+    rename(Review = document)
+
+ggplot(sentiment_top, aes(Review, Share, fill = Polarity, group = Polarity)) + 
+    geom_bar(stat='identity', position = position_dodge(), size = 1) + 
+    scale_fill_brewer(palette = "Set1") + 
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) + 
+    ggtitle("Sentiment scores in Top Restaurants (relative)")
+
+
+sentiment_bad <- convert(dfm_sentiment_prop_bad, "data.frame") %>%
+    gather(positive, negative, key = "Polarity", value = "Share") %>% 
+    mutate(document = as_factor(doc_id)) %>% 
+    rename(Review = document)
+
+ggplot(sentiment_bad, aes(Review, Share, fill = Polarity, group = Polarity)) + 
+    geom_bar(stat='identity', position = position_dodge(), size = 1) + 
+    scale_fill_brewer(palette = "Set1") + 
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) + 
+    ggtitle("Sentiment scores in Poor Ranking Restaurants (relative)")
+
+
+
+
+
+```
+
+### Average Sentiment by Restaurant name 
+
+```{r}
+out <- with(
+    Korean_reviews, 
+    sentiment_by(
+        get_sentences(comment), 
+        list(restaurant_name,price)
+    ))
+head(out, n=10)
+
+```
+
+### Highlight positive and negative phrases within 6 reviews from all Korean Restaurants, top ranking Korean Restaurants, and poor ranking Korean Restaurants 
+
+```{r}
+library(magrittr)
+library(dplyr)
+set.seed(123)
+
+Korean_reviews %>%
+    filter(restaurant_name %in% sample(unique(restaurant_name), 6)) %>% 
+    # %in% operator in R, is used to identify if an element belongs to a vector.
+    mutate(review = get_sentences(comment)) %$%
+    # The “exposition” pipe operator from magrittr package, %$% exposes the names  
+    # within the left-hand side object to the right-hand side expression. For  
+    # instance,
+    # iris %>%
+    # subset(Sepal.Length > mean(Sepal.Length)) %$%
+    # cor(Sepal.Length, Sepal.Width)
+    sentiment_by(comment, restaurant_name) %>%
+    highlight()
+
+
+library(tidyverse)
+library(cleanNLP)
+
+top_reviews %>%
+    filter(restaurant_name %in% sample(unique(restaurant_name), 6)) %>% 
+    # %in% operator in R, is used to identify if an element belongs to a vector.
+    mutate(review = get_sentences(comment)) %$%
+    # The “exposition” pipe operator from magrittr package, %$% exposes the names  
+    # within the left-hand side object to the right-hand side expression. For  
+    # instance,
+    # iris %>%
+    # subset(Sepal.Length > mean(Sepal.Length)) %$%
+    # cor(Sepal.Length, Sepal.Width)
+    sentiment_by(comment, restaurant_name) %>%
+    highlight()
+
+bad_reviews %>%
+    filter(restaurant_name %in% sample(unique(restaurant_name), 6)) %>% 
+    # %in% operator in R, is used to identify if an element belongs to a vector.
+    mutate(review = get_sentences(comment)) %$%
+    # The “exposition” pipe operator from magrittr package, %$% exposes the names  
+    # within the left-hand side object to the right-hand side expression. For  
+    # instance,
+    # iris %>%
+    # subset(Sepal.Length > mean(Sepal.Length)) %$%
+    # cor(Sepal.Length, Sepal.Width)
+    sentiment_by(comment, restaurant_name) %>%
+    highlight()
+
+```
+
+### Visualized Emotions 
+
+```{r}
+# Load required libraries
+library(syuzhet)
+library(tidyverse)
+
+# Read CSV
+raw_review2 <- read_csv("top 240 restaurants recommanded in los angeles 2.csv")
+
+korean_reviews22 <- raw_review2 %>%
+  filter(str_detect(tolower(Style), "korean"))
+
+
+# Take a random sample of 500 rows
+set.seed(123)
+raw_reviews22 <- slice_sample(korean_reviews22, n = 100)
+
+# Run NRC sentiment analysis on the 'comment' column
+nrc_data <- get_nrc_sentiment(raw_reviews22$Comment)
+
+# Combine sentiment scores with the original data
+df_combined <- bind_cols(raw_reviews22, nrc_data)
+
+# ------------------------
+# Visualization
+# ------------------------
+
+# Transpose the sentiment data for aggregation
+td <- data.frame(t(nrc_data))
+
+# Sum sentiment counts across all comments
+td_new <- data.frame(rowSums(td[1:ncol(td)]))
+
+# Rename and reshape for plotting
+names(td_new)[1] <- "count"
+td_new <- cbind(sentiment = rownames(td_new), td_new)
+rownames(td_new) <- NULL
+
+# Plot: count of words associated with each sentiment
+ggplot(td_new, aes(x = sentiment, y = count, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Restaurant Sentiments (NRC)") +
+  ylab("Review Count") +
+  xlab("Sentiment") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+### Visualized Emotions for Top Ranked Korean Restaurants 
+
+```{r}
+
+set.seed(123)
+top_reviews22 <- slice_sample(top_korean_spots, n = 100)
+
+# Run NRC sentiment analysis on the 'comment' column
+nrc_data_top <- get_nrc_sentiment(top_korean_spots$comment)
+
+# Combine sentiment scores with the original data
+df_combined_top <- bind_cols(top_korean_spots, nrc_data_top)
+
+# ------------------------
+# Visualization
+# ------------------------
+
+# Transpose the sentiment data for aggregation
+td_top <- data.frame(t(nrc_data_top))
+
+# Sum sentiment counts across all comments
+td_new_top <- data.frame(rowSums(td_top[1:ncol(td_top)]))
+
+# Rename and reshape for plotting
+names(td_new_top)[1] <- "count"
+td_new_top <- cbind(sentiment = rownames(td_new_top), td_new_top)
+rownames(td_new_top) <- NULL
+
+# Plot: count of words associated with each sentiment
+ggplot(td_new_top, aes(x = sentiment, y = count, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Top Restaurant Sentiments (NRC)") +
+  ylab("Review Count") +
+  xlab("Sentiment") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+```
+
+
+```{r}
+
+set.seed(123)
+bad_reviews22 <- slice_sample(bad_korean_spots, n = 100)
+
+# Run NRC sentiment analysis on the 'comment' column
+nrc_data_bad <- get_nrc_sentiment(bad_korean_spots$comment)
+
+# Combine sentiment scores with the original data
+df_combined_bad <- bind_cols(bad_korean_spots, nrc_data_bad)
+
+# ------------------------
+# Visualization
+# ------------------------
+
+# Transpose the sentiment data for aggregation
+td_bad <- data.frame(t(nrc_data_bad))
+
+# Sum sentiment counts across all comments
+td_new_bad <- data.frame(rowSums(td_bad[1:ncol(td_bad)]))
+
+# Rename and reshape for plotting
+names(td_new_bad)[1] <- "count"
+td_new_bad <- cbind(sentiment = rownames(td_new_bad), td_new_bad)
+rownames(td_new_bad) <- NULL
+
+# Plot: count of words associated with each sentiment
+ggplot(td_new_bad, aes(x = sentiment, y = count, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Low Ranked Restaurant Sentiments (NRC)") +
+  ylab("Review Count") +
+  xlab("Sentiment") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+
+```
+
+
+
+```{r}
+seongbuk_reviews <- Korean_reviews %>%
+  filter(restaurant_name == "Seong Buk Dong")
+
+print(seongbuk_reviews$comment)
+
+```
+
+```{r}
+library(dplyr)
+library(sentimentr)
+
+reviews_25 <- Korean_reviews %>%
+  filter(restaurant_name == "Seong Buk Dong") %>%
+  slice_head(n = 25)
+
+sentiment_each_review <- sentiment(reviews_25$comment)
+
+library(tidyr)
+
+sentiment_summary <- sentiment_each_review %>%
+  group_by(element_id) %>%
+  summarize(
+    sentiment = mean(sentiment),
+    review = first(get_sentences(reviews_25$comment[element_id]))
+  )
+
+print(sentiment_summary)
+
+```
+
+```{r}
+library(dplyr)
+library(sentimentr)
+
+top_reviews %>%
+  filter(restaurant_name == "Seong Buk Dong") %$%
+  sentiment_by(comment, by = restaurant_name) %>%
+  highlight()
+
+```
+
+
+```{r}
+library(syuzhet)
+library(tidyverse)
+
+
+seong_reviews <- Korean_reviews %>% 
+  filter(restaurant_name == "Seong Buk Dong")
+
+# Run NRC sentiment analysis on the 'comment' column
+nrc_data_seong <- get_nrc_sentiment(seong_reviews$comment)
+
+# Combine sentiment scores with original review data
+df_combined_seong <- bind_cols(seong_reviews, nrc_data_seong)
+
+# ------------------------
+# Visualization
+# ------------------------
+
+# Transpose for aggregation
+td_seong <- data.frame(t(nrc_data_seong))
+
+# Sum sentiment counts across all comments
+td_new_seong <- data.frame(rowSums(td_seong[1:ncol(td_seong)]))
+
+# Rename and reshape for plotting
+names(td_new_seong)[1] <- "count"
+td_new_seong <- cbind(sentiment = rownames(td_new_seong), td_new_seong)
+rownames(td_new_seong) <- NULL
+
+# Plot sentiment counts
+library(ggplot2)
+
+ggplot(td_new_seong, aes(x = sentiment, y = count, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  ggtitle("NRC Sentiment for Seong Buk Dong") +
+  ylab("Word Count") +
+  xlab("Sentiment") +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "black", color = NA),
+    panel.background = element_rect(fill = "black", color = NA),
+    panel.grid.major = element_line(color = "gray30"),
+    panel.grid.minor = element_line(color = "gray20"),
+    axis.text = element_text(color = "white"),
+    axis.title = element_text(color = "white"),
+    plot.title = element_text(color = "white"),
+    legend.position = "none"
+  )
+```
+
+### LDA topic modeling 
+```{r}
+
+installed.packages(c("tm", "topicmodels", "tidytext", "dplyr", "ggplot2"))
+library(tm)
+library(topicmodels)
+library(tidytext)
+library(dplyr)
+library(ggplot2)
+
+corp_top2 <- VCorpus(VectorSource(corp_top))
+
+# Define any custom stopwords if needed
+custom_stopwords <- c(stopwords("english"), "also", "use", "used", "food", "restaurant", "Korean", "korean", "like")
+
+# Clean the corpus
+corp_top2_clean <- corp_top2 %>%
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removeWords, custom_stopwords) %>%
+  tm_map(stripWhitespace)  
+
+dtmtop <- DocumentTermMatrix(corp_top2_clean)
+dtmfilteredtop <- removeSparseTerms(dtmtop, 0.99)
+
+lda_model <- LDA(dtmtop, k=2, control = list(seed = 123))
+
+terms(lda_model,10)
+
+doc_topics <- tidy(lda_model, matrix = "gamma")
+head(doc_topics)
+
+term_topics <- tidy(lda_model, matrix = "beta")
+head(term_topics)
+
+top_terms <- term_topics %>%
+  group_by(topic) %>%
+  top_n(10,beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+ggplot(top_terms, aes(x=reorder_within(term, beta, topic), y=beta, fill = factor(topic)))+
+  geom_col(show.legend = FALSE) + 
+  facet_wrap(~topic, scales = "free")+
+  coord_flip() +
+  scale_x_reordered() + 
+  labs(title = "Top Terms in each LDA Topic for Top Korean Restaurants", x="Terms", y="Beta")
+
+```
+
+
+```{r}
+corp_bad2 <- VCorpus(VectorSource(corp_bad))
+
+# Define any custom stopwords if needed
+custom_stopwords <- c(stopwords("english"), "also", "use", "used", "food","Korean", "korean",  "restaurant")
+
+# Clean the corpus
+corp_bad2_clean <- corp_bad2 %>%
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removeWords, custom_stopwords) %>%
+  tm_map(stripWhitespace)  
+
+dtmbad <- DocumentTermMatrix(corp_bad2_clean)
+dtmfilteredbad <- removeSparseTerms(dtmbad, 0.99)
+
+lda_model_bad <- LDA(dtmfilteredbad, k=2, control = list(seed = 123))
+
+terms(lda_model_bad,10)
+
+doc_topics_bad <- tidy(lda_model_bad, matrix = "gamma")
+head(doc_topics_bad)
+
+term_topics_bad <- tidy(lda_model_bad, matrix = "beta")
+head(term_topics_bad)
+
+top_terms_bad <- term_topics_bad %>%
+  group_by(topic) %>%
+  top_n(10,beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+ggplot(top_terms_bad, aes(x=reorder_within(term, beta, topic), y=beta, fill = factor(topic)))+
+  geom_col(show.legend = FALSE) + 
+  facet_wrap(~topic, scales = "free")+
+  coord_flip() +
+  scale_x_reordered() + 
+  labs(title = "Top Terms in each LDA Topic for Bad Korean Restaurants", x="Terms", y="Beta")
+
+
+```
+
+
+
+
