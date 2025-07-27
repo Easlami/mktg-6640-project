@@ -1,0 +1,187 @@
+---
+title: "Lasso + Elastic Net"
+author: "Ethan Aslami"
+date: "2025-07-22"
+output: html_document
+---
+
+```{r}
+
+library(quanteda)
+library(caret)
+library(here)
+library(kableExtra)
+
+source(here("preprocessing_master.R"))
+```
+```{r}
+
+
+# Extract relevant columns
+text_data <- korean_reviews$comment
+numerical_features <- korean_reviews %>% select(star_rating, number_of_reviews)
+target <- korean_reviews$rank
+
+# Create a corpus
+corpus <- corpus(text_data)
+
+# # Create tokens and remove punctuation
+# tokens <- tokens(corpus, remove_punct = TRUE)
+# 
+# # Create a document-feature matrix
+# dfm <- dfm(tokens)
+# 
+# # Convert the dfm to TF-IDF
+# dfm_tfidf <- dfm_tfidf(dfm)
+# 
+# 
+# # Convert DFM to a dense matrix
+# text_features <- convert(dfm_tfidf_reviews, to = "matrix")
+# 
+
+# Tokenize: remove punctuation, convert to lowercase, remove stopwords
+tokens <- tokens(
+  corpus,
+  remove_punct = TRUE
+) %>%
+  tokens_tolower() %>%
+  tokens_remove(custom_stopwords) %>%   # remove stopwords using english group and our custom words
+  tokens_ngrams(n = 2)  # for bigrams; use n = 1:2 for unigrams + bigrams
+
+# Create DFM from n-gram tokens
+dfm <- dfm(tokens)
+
+# Optionally trim features that are too rare or too common
+dfm <- dfm_trim(dfm, min_termfreq = 5, max_docfreq = 0.9, docfreq_type = "prop")
+
+# Convert to TF-IDF
+dfm_tfidf <- dfm_tfidf(dfm)
+
+# Convert to dense matrix
+text_features <- convert(dfm_tfidf, to = "matrix")
+
+
+
+# Combine numerical features and text features
+X <- cbind(numerical_features, text_features)
+y <- target
+
+set.seed(42)
+trainIndex <- createDataPartition(y, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+X_train <- X[ trainIndex,]
+X_test <- X[-trainIndex,]
+y_train <- y[ trainIndex]
+y_test <- y[-trainIndex]
+
+# Define training control
+train_control <- trainControl(method = "cv", number = 5)
+
+# Train Lasso model
+lasso_model <- train(X_train, y_train, method = "glmnet", 
+                     trControl = train_control, 
+                     tuneGrid = expand.grid(alpha = 1, lambda = 10^seq(2, -2, by = -0.1)))
+
+# Train Ridge model
+ridge_model <- train(X_train, y_train, method = "glmnet", 
+                     trControl = train_control, 
+                     tuneGrid = expand.grid(alpha = 0, lambda = 10^seq(2, -2, by = -0.1)))
+
+# Train Elastic Net model
+elastic_net_model <- train(X_train, y_train, method = "glmnet", 
+                           trControl = train_control, 
+                           tuneGrid = expand.grid(alpha = 0.5, lambda = 10^seq(2, -2, by = -0.1)))
+
+# Predict and calculate RMSE for Lasso
+lasso_pred <- predict(lasso_model, X_test)
+lasso_rmse <- sqrt(mean((y_test - lasso_pred)^2))
+
+# Predict and calculate RMSE for Ridge
+ridge_pred <- predict(ridge_model, X_test)
+ridge_rmse <- sqrt(mean((y_test - ridge_pred)^2))
+
+# Predict and calculate RMSE for Elastic Net
+elastic_net_pred <- predict(elastic_net_model, X_test)
+elastic_net_rmse <- sqrt(mean((y_test - elastic_net_pred)^2))
+
+# Print RMSE values
+lasso_rmse
+ridge_rmse
+elastic_net_rmse
+
+lasso_coef <- as.data.frame(as.matrix(coef(lasso_model$finalModel, s = lasso_model$bestTune$lambda)))
+lasso_coef <- lasso_coef[lasso_coef != 0, , drop = FALSE]
+colnames(lasso_coef) <- "Coefficient"
+lasso_coef <- rownames_to_column(lasso_coef, var = "Feature")
+top5_lasso_coef <- lasso_coef %>% top_n(15, abs(Coefficient))
+kable(top5_lasso_coef, caption = "Top 5 Lasso Regression Coefficients") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+ridge_coef <- as.data.frame(as.matrix(coef(ridge_model$finalModel, s = ridge_model$bestTune$lambda)))
+colnames(ridge_coef) <- "Coefficient"
+ridge_coef <- rownames_to_column(ridge_coef, var = "Feature")
+top5_ridge_coef <- ridge_coef %>% top_n(15, abs(Coefficient))
+kable(top5_ridge_coef, caption = "Top 5 Ridge Regression Coefficients") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+elastic_net_coef <- as.data.frame(as.matrix(coef(elastic_net_model$finalModel, s = elastic_net_model$bestTune$lambda)))
+elastic_net_coef <- elastic_net_coef[elastic_net_coef != 0, , drop = FALSE]
+colnames(elastic_net_coef) <- "Coefficient"
+elastic_net_coef <- rownames_to_column(elastic_net_coef, var = "Feature")
+top5_elastic_net_coef <- elastic_net_coef %>% top_n(15, abs(Coefficient))
+kable(top5_elastic_net_coef, caption = "Top 5 Elastic Net Regression Coefficients") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+```{r}
+library(ggplot2)
+
+# Extract coefficients
+elastic_net_coef <- as.data.frame(as.matrix(coef(elastic_net_model$finalModel, 
+                                                 s = elastic_net_model$bestTune$lambda)))
+colnames(elastic_net_coef) <- "Coefficient"
+elastic_net_coef <- rownames_to_column(elastic_net_coef, var = "Feature")
+elastic_net_coef <- elastic_net_coef[elastic_net_coef$Coefficient != 0, ]
+
+# Get top N by absolute value
+top_n <- 20
+top_coef <- elastic_net_coef %>%
+  mutate(abs_coef = abs(Coefficient)) %>%
+  arrange(desc(abs_coef)) %>%
+  slice(1:top_n)
+
+# Plot
+ggplot(top_coef, aes(x = reorder(Feature, Coefficient), y = Coefficient, fill = Coefficient > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(
+    title = "Top 20 Elastic Net Coefficients",
+    x = "Feature",
+    y = "Coefficient"
+  ) +
+  scale_fill_manual(values = c("firebrick", "steelblue"))
+
+
+```
+
+## LLM Experimentation
+```{r}
+library(ellmer)
+library(ollamar)
+library(tidyverse)
+
+sample_reviews <- korean_reviews %>%
+  filter(rank_group == "Low") %>%
+  tidyverse::pull(comment)
+
+
+
+
+prompt <- paste("Summarize the issues and tone in these customer reviews:\n\n",
+                paste(sample_reviews, collapse = "\n\n"))
+
+llm_response <- generate("gemma3:4b", prompt, output = "text")
+cat(llm_response)
+
+```
+

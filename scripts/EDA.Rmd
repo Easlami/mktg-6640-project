@@ -16,12 +16,13 @@ library(quanteda)
 library(janitor)
 library(here)
 library(skimr)
+library(knitr)
 
 ```
 ## Load Data
 ```{r}
 
-source("preprocessing_master.R")
+source(here("preprocessing_master.R"))
 
 
 ```
@@ -41,6 +42,15 @@ summary(raw_reviews)
 # Check data quality 
 skim(raw_reviews)
 # We are looking at a really clean dataset, there are hardly any issues with missing data and no duplicates
+
+# Skim the data
+skim_summary <- raw_reviews %>% 
+  select(rank, star_rating, number_of_reviews) %>% 
+  skim()
+
+# Filter to numeric only and select basic summary stats
+skim_summary %>%
+  kable(format = "markdown", caption = "Summary of Numeric Variables in Raw Reviews")
 
 ```
 
