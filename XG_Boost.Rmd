@@ -224,32 +224,43 @@ sparse_dummies <- as(dummies, "dgCMatrix")
 ```
 
 ```{r}
-combined_data <- cbind(sparse_dummies, sparse_dfm, combined_reviews$star_rating)
+combined_data <- cbind(sparse_dummies, sparse_dfm)
+```
+
+```{r}
+# Convert to numeric class labels
+target <- as.numeric(as.factor(combined_reviews$group)) - 1  # xgboost expects 0-based classes  # Subtract 1 to start at 0
+
+```
+
+```{r}
+target <- as.numeric(as.factor(combined_reviews$group)) - 1
+unique(target)
+length(unique(target))
 ```
 
 ## Model Creation
 ```{r}
-# Step 1: Prepare target variable
-target <- combined_reviews$star_rating
-target <- as.numeric(target)  # Ensure it's numeric
+library(xgboost)
+library(caret)  # For data split
 
-# Step 2: Train-test split
+# Split into training and testing
 set.seed(123)
-train_idx <- sample(seq_len(nrow(combined_data)), size = 0.8 * nrow(combined_data))
+train_idx <- createDataPartition(target, p = 0.8, list = FALSE)
+
 dtrain <- xgb.DMatrix(data = combined_data[train_idx, ], label = target[train_idx])
 dtest  <- xgb.DMatrix(data = combined_data[-train_idx, ], label = target[-train_idx])
 
-# Step 3: Define model parameters
+# Define parameters
+num_class <- length(unique(target))
+
 params <- list(
-  objective = "reg:squarederror",  # Regression objective
-  eval_metric = "rmse",            # Evaluation metric
-  max_depth = 6,
-  eta = 0.1,
-  booster = "gbtree"
+  objective = "binary:logistic",
+  eval_metric = "logloss"
 )
 
-# Step 4: Train the model
-xgb_model <- xgb.train(
+# Train model
+model <- xgb.train(
   params = params,
   data = dtrain,
   nrounds = 100,
@@ -257,16 +268,170 @@ xgb_model <- xgb.train(
   early_stopping_rounds = 10,
   verbose = 1
 )
+```
 
-# Step 5: Make predictions
-preds <- predict(xgb_model, dtest)
+```{r}
+pred_probs <- predict(model, dtest)
+pred_labels <- if (num_class > 2) max.col(matrix(pred_probs, ncol = num_class, byrow = TRUE)) - 1 else as.numeric(pred_probs > 0.5)
 
-# Step 6: Evaluate performance (RMSE)
-rmse <- sqrt(mean((preds - target[-train_idx])^2))
-print(paste("Test RMSE:", round(rmse, 3)))
+confusionMatrix(factor(pred_labels), factor(target[-train_idx]))
+```
 
-# Optional: Feature importance
-importance <- xgb.importance(model = xgb_model)
-xgb.plot.importance(importance_matrix = importance, top_n = 20)
+```{r}
+# Combine column names from dummies and dfm
+text_feature_names <- colnames(dfm)
+dummy_feature_names <- colnames(sparse_dummies)
+all_feature_names <- c(dummy_feature_names, text_feature_names)
+```
+
+```{r}
+importance_matrix <- xgb.importance(feature_names = all_feature_names, model = model)
+
+xgb.plot.importance(importance_matrix, top_n = 20)
+```
+
+```{r}
+# Don't convert to numeric target — use original factor
+combined_reviews$group <- factor(combined_reviews$group, levels = c("group_low", "group_high"))
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(quanteda)
+library(quanteda.textplots)  # optional for visualizations
+library(quanteda.textstats)
+
+# Add target to the reviews dataset
+combined_reviews$target <- target
+
+# Create tokens and remove punctuation and stop words
+tokens_clean <- tokens(reviews_corpus, remove_punct = TRUE) %>%
+  tokens_remove(stopwords("en"))
+
+# Create dfm from cleaned tokens
+dfm_clean <- dfm(tokens_clean, tolower = TRUE)
+# Convert dfm to a matrix and then to data.frame
+dfm_mat <- as.data.frame(as.matrix(dfm_clean))
+
+dfm_mat$group <- combined_reviews$target
+
+# Make sure row count matches
+stopifnot(nrow(dfm_mat) == nrow(combined_reviews))
+
+# Bind group label
+dfm_mat$group <- combined_reviews$target
+
+# Split into two datasets for group 0 and group 1
+group_0 <- dfm_mat[dfm_mat$group == 0, -ncol(dfm_mat)]
+group_1 <- dfm_mat[dfm_mat$group == 1, -ncol(dfm_mat)]
+
+# Sum word counts in each group
+group_0_sums <- colSums(group_0)
+group_1_sums <- colSums(group_1)
+
+# Combine into a data frame
+word_comparison <- data.frame(
+  word = names(group_0_sums),
+  group_0 = group_0_sums,
+  group_1 = group_1_sums
+)
+
+# Calculate difference
+word_comparison <- word_comparison %>%
+  mutate(
+    diff = group_1 - group_0,
+    total = group_0 + group_1
+  ) %>%
+  arrange(desc(abs(diff)))
+
+word_comparison <- word_comparison %>%
+  rename(
+    group_low = group_0,
+    group_high = group_1
+  )
+# View most distinguishing words
+head(word_comparison, 50)
+```
+
+## Adding a few More Columns 
+
+```{r}
+library(tidytext)
+library(dplyr)
+
+# Make sure the column exists
+stopifnot("comment" %in% colnames(combined_reviews))
+
+# Tokenize words from the 'comment' column
+word_usage <- combined_reviews %>%
+  mutate(doc_id = row_number()) %>%
+  select(restaurant_name, comment) %>%
+  unnest_tokens(word, comment, token = "words") %>%
+  distinct(restaurant_name, word)
+
+# Count how many restaurants used each word
+word_restaurant_counts <- word_usage %>%
+  count(word, name = "restaurant_count")
+```
+
+```{r}
+# Convert importance matrix to data frame if it's not already
+importance_df <- as.data.frame(importance_matrix)
+
+# Rename column for easier joining
+importance_df <- importance_df %>%
+  rename(word = Feature, xgb_importance = Gain)
+```
+
+```{r}
+word_comparison <- word_comparison %>%
+  left_join(word_restaurant_counts, by = "word") %>%
+  left_join(importance_df, by = "word") %>%
+  mutate(
+    restaurant_count = replace_na(restaurant_count, 0),
+    xgb_importance = replace_na(xgb_importance, 0)
+  )
+```
+
+```{r}
+# View final table with new columns
+head(word_comparison %>%
+       select(word, group_low, group_high, diff, restaurant_count, xgb_importance) %>%
+       arrange(desc(abs(diff))), 50)
+```
+
+```{r}
+top_words <- word_comparison %>%
+  arrange(desc(xgb_importance)) %>%
+  slice_head(n = 20)
+
+head(top_words, 20)
+```
+
+```{r}
+library(officer)
+library(flextable)
+
+# Select relevant columns and arrange by importance
+table_to_export <- word_comparison %>%
+  select(word, group_low, group_high, diff, restaurant_count, xgb_importance) %>%
+  arrange(desc(xgb_importance)) %>%
+  slice_head(n = 50)  # top 50 words for presentation
+
+# Create flextable object
+ft <- flextable(table_to_export)
+
+# Format table nicely (auto width, bold headers, etc.)
+ft <- autofit(ft)
+ft <- theme_vanilla(ft)
+
+# Create Word document and add table
+doc <- read_docx()
+doc <- body_add_flextable(doc, ft)
+
+# Save the Word doc
+print(doc, target = "word_comparison_table.docx")
 ```
 
