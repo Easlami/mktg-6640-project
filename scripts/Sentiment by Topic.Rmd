@@ -231,65 +231,70 @@ sents_overall <- get_sentiment_by_topic(korean_reviews) %>%
   rename(overall = net_sentiment)
 
 sents_top <- get_sentiment_by_topic(top_korean) %>%
-  rename(top = net_sentiment)
+  rename(overall = net_sentiment)
 
 sents_low <- get_sentiment_by_topic(low_korean) %>%
-  rename(low = net_sentiment)
+  rename(overall = net_sentiment)
 
 sents_sbd <- get_sentiment_by_topic(seong_buk_dong) %>%
-  rename(seongbukdong = net_sentiment)
+  rename(overall = net_sentiment)
 ```
 
 ```{r}
-combined <- full_join(sents_overall, sents_top, by = "topic") %>%
+# Step 1: Rename 'overall' column in each group's sentiment df
+sents_overall <- sents_overall %>% select(topic, overall) %>% rename(overall_score = overall)
+sents_top <- sents_top %>% select(topic, overall) %>% rename(top_score = overall)
+sents_low <- sents_low %>% select(topic, overall) %>% rename(low_score = overall)
+sents_sbd <- sents_sbd %>% select(topic, overall) %>% rename(seongbukdong_score = overall)
+
+# Step 2: Join all by topic
+combined <- sents_overall %>%
+  full_join(sents_top, by = "topic") %>%
   full_join(sents_low, by = "topic") %>%
   full_join(sents_sbd, by = "topic") %>%
-  replace_na(list(overall = 0, top = 0, low = 0, seongbukdong = 0)) %>%
+  replace_na(list(overall_score = 0, top_score = 0, low_score = 0, seongbukdong_score = 0)) %>%
   arrange(topic)
 
-# Prep for radar: rows = groups, columns = topics
-radar_ready <- combined %>%
-  column_to_rownames("topic") %>%
-  t() %>%
-  as.data.frame()
+# Step 3: Convert to radar format
+radar_ready <- combined %>% column_to_rownames("topic") %>% t()
 
-# Add max/min for fmsb
+# Step 4: Set boundaries for fmsb
+max_val <- max(radar_ready, na.rm = TRUE)
+min_val <- min(radar_ready, na.rm = TRUE)
+
 radar_chart_data <- rbind(
-  rep(max(radar_ready), ncol(radar_ready)),
-  rep(min(radar_ready), ncol(radar_ready)),
+  rep(max_val, ncol(radar_ready)),  # max row
+  rep(min_val, ncol(radar_ready)),  # min row
   radar_ready
 )
+
 ```
 
 
 ```{r}
-# Convert all columns to numeric (unlist if needed)
-radar_ready <- combined %>%
-  column_to_rownames("topic") %>%
-  t() %>%
-  as.data.frame()
+# 1. Transpose and convert to data frame
+radar_ready <- as.data.frame(t(combined %>% select(-topic)))
+colnames(radar_ready) <- combined$topic  # Set the column names to the topics
+rownames(radar_ready) <- c("overall", "top", "low", "seongbukdong")
 
-# Convert factors or lists to numeric
-radar_ready[] <- lapply(radar_ready, function(x) {
-  if(is.list(x)) {
-    return(as.numeric(unlist(x)))
-  } else {
-    return(as.numeric(x))
-  }
-})
+# 2. Add min and max rows for fmsb format
+max_vals <- rep(max(radar_ready, na.rm = TRUE), ncol(radar_ready))
+min_vals <- rep(min(radar_ready, na.rm = TRUE), ncol(radar_ready))
 
-# Then add max/min rows for fmsb
-radar_chart_data <- rbind(
-  rep(max(radar_ready, na.rm = TRUE), ncol(radar_ready)),
-  rep(min(radar_ready, na.rm = TRUE), ncol(radar_ready)),
-  radar_ready
-)
+radar_chart_data <- rbind(max_vals, min_vals, radar_ready)
+
+# 3. Convert to proper data frame
+radar_chart_data <- as.data.frame(radar_chart_data)
+```
+
+```{r}
+rownames(radar_chart_data)[1:2] <- c("max", "min")
 ```
 
 
 ```{r}
 colors_border <- c("black", "forestgreen", "red", "blue")
-colors_fill <- adjustcolor(colors_border, alpha.f = 0.2)
+colors_fill <- adjustcolor(colors_border, alpha.f = 0.4)
 
 par(mar = c(1, 1, 2, 6))  # bigger right margin
 radarchart(
@@ -298,7 +303,7 @@ radarchart(
   pcol = colors_border,
   pfcol = colors_fill,
   plwd = 3,
-  plty = c(0,0,1,1,1,1),
+  plty = c(1,0,0,1,0,0),
   cglcol = "grey",
   caxislabels = seq(min(radar_chart_data[2, ]), max(radar_chart_data[1, ]), length.out = 5),
   cglty = 1,
@@ -306,8 +311,49 @@ radarchart(
   vlcex = 0.8
 )
 legend(
-  x = 1.3, y = 1.1,
+  x = 1.1, y = 1.1,
   legend = c("All Korean", "Top Korean", "Low Korean", "Seong Buk Dong"),
+  bty = "n",
+  pch = 20,
+  col = colors_border,
+  text.col = "black",
+  cex = 0.8,
+  pt.cex = 2
+)
+```
+```{r}
+rownames(radar_chart_data)
+```
+```{r}
+radar_chart_data_subset <- radar_chart_data[c("max", "min", "top", "low"), ]
+
+# Force min and max values
+radar_chart_data_subset["max", ] <- 15
+radar_chart_data_subset["min", ] <- -5
+
+# Colors
+colors_border <- c("forestgreen", "red")
+colors_fill <- adjustcolor(colors_border, alpha.f = 0.4)
+
+# Plot with fixed axis range
+par(mar = c(1, 1, 2, 6))
+radarchart(
+  radar_chart_data_subset,
+  axistype = 1,
+  pcol = colors_border,
+  pfcol = colors_fill,
+  plwd = 3,
+  plty = c(1, 1, 1),
+  cglcol = "grey",
+  caxislabels = seq(-5, 20, by = 5),
+  cglty = 1,
+  cglwd = 0.8,
+  vlcex = 0.8
+)
+
+legend(
+  x = 1.1, y = 1.1,
+  legend = c("Top Korean", "Low Korean"),
   bty = "n",
   pch = 20,
   col = colors_border,
